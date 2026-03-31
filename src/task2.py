@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch_geometric.data import Data, DataLoader
-from torch_geometric.nn import GCNConv, global_mean_pool, global_max_pool
+from torch_geometric.nn import GCNConv, global_mean_pool, global_max_pool, PMLP
 import matplotlib.pyplot as plt
 
 
@@ -145,69 +145,103 @@ class JetGCN(nn.Module):
         # Classify
         return self.classifier(global_mean)
 
-# ── Training ─────────────────────────────────────────────────────────────────
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = JetGCN().to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
-criterion = nn.CrossEntropyLoss()
+# ── Model: pMLP (pure MLP baseline, no graph structure) ──────────────────────
+class JetPMLP(nn.Module):
+    def __init__(self, in_dim=4, hidden=64, out_dim=2):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(in_dim, hidden), nn.ReLU(), nn.Dropout(0.3),
+            nn.BatchNorm1d(hidden)
+        )
+        self.mlp = PMLP(
+            in_channels=hidden, hidden_channels=hidden,
+            out_channels=hidden, num_layers=2, dropout=0.3
+        )
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden, hidden), nn.ReLU(),
+            nn.Dropout(0.3), nn.Linear(hidden, out_dim)
+        )
 
-EPOCHS = 15
+    def forward(self, data):
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+        x = self.encoder(x)
+        x = self.mlp(x, edge_index)
+        x = global_mean_pool(x, batch)
+        return self.classifier(x)
 
-for epoch in range(1, EPOCHS + 1):
-    # Train
-    model.train()
-    total_loss = 0
-    for batch in train_loader:
-        batch = batch.to(device)
-        optimizer.zero_grad()
-        out = model(batch)
-        loss = criterion(out, batch.y.view(-1))
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item() * batch.num_graphs
 
-    # Validate
+# ── Training helper ──────────────────────────────────────────────────────────
+def train_and_evaluate(model, name, train_loader, val_loader, test_loader, epochs=15, lr=1e-2):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    criterion = nn.CrossEntropyLoss()
+
+    for epoch in range(1, epochs + 1):
+        model.train()
+        total_loss = 0
+        for batch in train_loader:
+            batch = batch.to(device)
+            optimizer.zero_grad()
+            out = model(batch)
+            loss = criterion(out, batch.y.view(-1))
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item() * batch.num_graphs
+
+        model.eval()
+        correct, total = 0, 0
+        all_labels, all_scores = [], []
+        with torch.no_grad():
+            for batch in val_loader:
+                batch = batch.to(device)
+                out = model(batch)
+                pred = out.argmax(dim=1)
+                correct += (pred == batch.y.view(-1)).sum().item()
+                total += batch.num_graphs
+                probs = torch.softmax(out, dim=1)[:, 1]
+                all_scores.extend(probs.cpu().numpy())
+                all_labels.extend(batch.y.view(-1).cpu().numpy())
+
+        _, _, val_auc = compute_roc_auc(all_labels, all_scores)
+        print(f"[{name}] Epoch {epoch:2d} | Loss {total_loss / len(train_graphs):.4f} | Val Acc {correct / total:.4f} | Val AUC {val_auc:.4f}")
+
+    # Test
     model.eval()
-    correct = 0
-    total = 0
+    correct, total = 0, 0
     all_labels, all_scores = [], []
     with torch.no_grad():
-        for batch in val_loader:
+        for batch in test_loader:
             batch = batch.to(device)
             out = model(batch)
             pred = out.argmax(dim=1)
             correct += (pred == batch.y.view(-1)).sum().item()
             total += batch.num_graphs
-            probs = torch.softmax(out, dim=1)[:, 1]  # P(quark)
+            probs = torch.softmax(out, dim=1)[:, 1]
             all_scores.extend(probs.cpu().numpy())
             all_labels.extend(batch.y.view(-1).cpu().numpy())
 
-    _, _, val_auc = compute_roc_auc(all_labels, all_scores)
-    print(f"Epoch {epoch:2d} | Loss {total_loss / len(train_graphs):.4f} | Val Acc {correct / total:.4f} | Val AUC {val_auc:.4f}")
+    fprs, tprs, test_auc = compute_roc_auc(all_labels, all_scores)
+    print(f"[{name}] Test Accuracy: {correct / total:.4f}")
+    print(f"[{name}] Test AUC:      {test_auc:.4f}")
+    return fprs, tprs, test_auc
 
-# ── Test ─────────────────────────────────────────────────────────────────────
-model.eval()
-correct = 0
-total = 0
-all_labels, all_scores = [], []
-with torch.no_grad():
-    for batch in test_loader:
-        batch = batch.to(device)
-        out = model(batch)
-        pred = out.argmax(dim=1)
-        correct += (pred == batch.y.view(-1)).sum().item()
-        total += batch.num_graphs
-        probs = torch.softmax(out, dim=1)[:, 1]
-        all_scores.extend(probs.cpu().numpy())
-        all_labels.extend(batch.y.view(-1).cpu().numpy())
 
-fprs, tprs, test_auc = compute_roc_auc(all_labels, all_scores)
-print(f"\nTest Accuracy: {correct / total:.4f}")
-print(f"Test AUC:      {test_auc:.4f}")
+# ── Training ─────────────────────────────────────────────────────────────────
+print("\n=== Training GCN ===")
+gcn_fprs, gcn_tprs, gcn_auc = train_and_evaluate(
+    JetGCN(), "GCN", train_loader, val_loader, test_loader
+)
 
-# ── Plot ROC curve ───────────────────────────────────────────────────────────
+print("\n=== Training pMLP ===")
+mlp_fprs, mlp_tprs, mlp_auc = train_and_evaluate(
+    JetPMLP(), "pMLP", train_loader, val_loader, test_loader
+)
+
+# ── Plot ROC curves ──────────────────────────────────────────────────────────
 plt.figure()
-plt.plot(fprs, tprs, label=f"GCN (AUC = {test_auc:.4f})")
+plt.plot(gcn_fprs, gcn_tprs, label=f"GCN (AUC = {gcn_auc:.4f})")
+plt.plot(mlp_fprs, mlp_tprs, label=f"pMLP (AUC = {mlp_auc:.4f})")
 plt.plot([0, 1], [0, 1], "--", color="gray", label="Random")
 plt.xlabel("False Positive Rate")
 plt.ylabel("True Positive Rate")
@@ -216,3 +250,4 @@ plt.legend()
 plt.tight_layout()
 plt.savefig("task2_roc.png", dpi=150)
 plt.show()
+
