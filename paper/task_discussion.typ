@@ -23,9 +23,12 @@
 
 === Task II
 
-Based on the AUC benchmark in @Komiske2019, most neural network methods such as RNN and CNN achieved around 0.87 to 0.90 AUC. Our GCN achieved around $0.87$ baseline AUC without fine-tuning. This competitive result is due to the permutation invariant nature of the GCN model. Both GCN and DeepSet are permutation invariant, which perfectly suits the dataset. The graph construction is based on k-nearest neighbors where k=7, so two particles are neighbors in the graph if and only if they are k-neighbors within the same particle group. The edge index is based on rapidity and phi because these two coordinates contain spatial information that respects local geometry. The other model uses PMLP in @Yang2023, which is simpler it relies solely on MLPs in training and simple graph aggregation in inference.The metric is not as competitive as the GCN because the model complexity is much simpler, but it's a good baseline for graph neural network in general. 
+Based on the AUC benchmark in @Komiske2019, most neural network methods such as RNN and CNN achieved around 0.87 to 0.90 AUC. Our GCN achieved around $0.87$ baseline AUC without fine-tuning. This competitive result is due to the permutation invariant nature of the GCN model. Both GCN and DeepSet are permutation invariant, which perfectly suits the dataset. The graph construction is based on k-nearest neighbors where k=7, so two particles are neighbors in the graph if and only if they are k-neighbors within the same particle group. The edge index is based on rapidity and phi because these two coordinates contain spatial information that respects local geometry. The other model uses PMLP in @Yang2023, which is simpler it relies solely on MLPs in training and simple graph aggregation in inference.The metric is not as competitive as the GCN because the model complexity is much simpler, but it's a good baseline for graph neural network in general.
+
+=== Task III
+
+Quantum Machine Learning is a topic at the intersection of machine learning and quantum computing. Machine learning seeks to learn patterns in data using models, while quantum computing can solve high-dimensional and complex problems with potential exponential speedup. QML combines these two fields by using hybrid models that integrate classical machine learning methods with quantum computing algorithms. Fundamentally, quantum circuits perform unitary rotations in high-dimensional Hilbert spaces; well-designed algorithms can destructively interfere with unwanted states and constructively amplify desired states through carefully chosen rotations. In the "Attention Is All You Need" framework, attention mechanisms allow information to flow selectively across network depth, enabling layers to aggregate outputs from earlier layers rather than relying solely on immediate predecessors.
 
 === Task V
-
 
 #bibliography("refs.bib")
