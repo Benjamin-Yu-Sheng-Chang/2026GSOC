@@ -1,0 +1,19 @@
+[workspace]
+authors = ["Benjamin-Yu-Sheng-Chang <benji.chang@mail.utoronto.ca>"]
+channels = ["conda-forge"]
+name = "GSOC"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+numpy = ">=1.26.4,<2"
+matplotlib = ">=3.10.8,<4"
+autoray = ">=0.6.7,<0.8"
+ipykernel = ">=7.2.0,<8"
+
+[pypi-dependencies]
+pennylane = ">=0.42.3, <0.43"
+torch = ">=2.11.0, <3"
+torch-geometric = ">=2.7.0, <3"
