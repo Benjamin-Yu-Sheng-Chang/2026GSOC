@@ -13,11 +13,9 @@ def compute_roc_auc(labels, scores):
     """Compute ROC curve and AUC from labels and predicted scores (numpy)."""
     labels = np.asarray(labels)
     scores = np.asarray(scores)
-    # Sort by descending score
     order = np.argsort(-scores)
     labels = labels[order]
 
-    # Walk through sorted predictions, accumulating TPR / FPR
     n_pos = labels.sum()
     n_neg = len(labels) - n_pos
     tp = 0
@@ -32,58 +30,53 @@ def compute_roc_auc(labels, scores):
         tprs.append(tp / n_pos)
         fprs.append(fp / n_neg)
 
-    # AUC via trapezoidal rule
     tprs = np.array(tprs)
     fprs = np.array(fprs)
     auc = np.trapz(tprs, fprs)
     return fprs, tprs, auc
 
 
-# ── Load data ────────────────────────────────────────────────────────────────
+print("=" * 60)
+print("Loading data")
+print("=" * 60)
 raw = np.load("../data/QG_jets.npz")
-X = raw["X"]  # (100000, 139, 4)  features: pT, rapidity, phi, pdgid
-y = raw["y"]  # (100000,)         0=gluon, 1=quark
+X = raw["X"]
+y = raw["y"]
 
 
-# ── Compute feature normalization stats (over non-zero particles) ────────────
 all_particles = X.reshape(-1, 4)
 nonzero_mask = all_particles[:, 0] > 0
 feat_mean = all_particles[nonzero_mask].mean(axis=0)
 feat_std = all_particles[nonzero_mask].std(axis=0)
-feat_std[feat_std < 1e-8] = 1.0  # avoid division by zero
+feat_std[feat_std < 1e-8] = 1.0
 
 
-# ── Build graphs ─────────────────────────────────────────────────────────────
 def jet_to_graph(particles, label, k=7):
     """Convert one jet (N, 4) into a PyG Data object.
 
     Nodes  = particles with non-zero pT.
     Edges  = k-nearest neighbours in (rapidity, phi) space.
     """
-    # Remove zero-padded particles
     mask = particles[:, 0] > 0
-    feats = particles[mask]  # (n_particles, 4)
+    feats = particles[mask]
     if len(feats) == 0:
         feats = particles[:1]
 
-    coords = feats[:, 1:3]  # rapidity, phi (before normalization)
+    coords = feats[:, 1:3]
 
-    # Normalize features
     feats = (feats - feat_mean) / feat_std
     n = len(feats)
 
-    # kNN edges in (rapidity, phi) space
     k_actual = min(k, n - 1)
     if k_actual > 0:
-        diff = coords[:, None, :] - coords[None, :, :]  # (n, n, 2)
-        dist = (diff ** 2).sum(axis=-1)                  # (n, n)
+        diff = coords[:, None, :] - coords[None, :, :]
+        dist = (diff ** 2).sum(axis=-1)
         np.fill_diagonal(dist, np.inf)
-        neighbours = np.argsort(dist, axis=1)[:, :k_actual]  # (n, k_actual)
+        neighbours = np.argsort(dist, axis=1)[:, :k_actual]
 
         src = np.repeat(np.arange(n), k_actual)
         dst = neighbours.flatten()
         edge_index = np.stack([src, dst], axis=0)
-        # Make undirected
         edge_index = np.concatenate([edge_index, edge_index[[1, 0]]], axis=1)
     else:
         edge_index = np.zeros((2, 0), dtype=np.int64)
@@ -95,15 +88,16 @@ def jet_to_graph(particles, label, k=7):
     )
 
 
-print("Building graphs...")
+print("=" * 60)
+print("Building graphs")
+print("=" * 60)
 graphs = [jet_to_graph(X[i], y[i]) for i in range(len(X))]
 print(f"Built {len(graphs)} graphs.  Example: {graphs[0]}")
 
-# ── Train / val / test split ────────────────────────────────────────────────
 rng = np.random.default_rng(42)
 perm = rng.permutation(len(graphs))
-n_test = len(graphs) // 5           # 20%
-n_val = len(graphs) // 10           # 10%
+n_test = len(graphs) // 5
+n_val = len(graphs) // 10
 test_graphs = [graphs[i] for i in perm[:n_test]]
 val_graphs = [graphs[i] for i in perm[n_test:n_test + n_val]]
 train_graphs = [graphs[i] for i in perm[n_test + n_val:]]
@@ -113,39 +107,29 @@ val_loader = DataLoader(val_graphs, batch_size=256)
 test_loader = DataLoader(test_graphs, batch_size=256)
 
 
-# ── Model: Encoding + GCN ───────────────────────────────────────────────────
 class JetGCN(nn.Module):
     def __init__(self, in_dim=4, hidden=64, out_dim=2):
         super().__init__()
-        # Encoding: linear projection of raw features
         self.encoder = nn.Sequential(
             nn.Linear(in_dim, hidden), nn.ReLU(), nn.Dropout(0.3),
             nn.BatchNorm1d(hidden)
         )
 
-        # GCN layers
         self.conv1 = GCNConv(hidden, hidden)
-        # Classifier
         self.classifier = nn.Sequential(
             nn.Linear(hidden, hidden), nn.ReLU(),
             nn.Dropout(0.3), nn.Linear(hidden, out_dim)
         )
-        
 
     def forward(self, data):
         x, edge_index, batch = data.x, data.edge_index, data.batch
 
-        # Encode
         x = self.encoder(x)
-        # GCN
         x = self.conv1(x, edge_index).relu()
-        # x = self.conv2(x, edge_index).relu()
-        # Readout: mean-pool over nodes → one vector per graph
         global_mean = global_mean_pool(x, batch)
-        # Classify
         return self.classifier(global_mean)
 
-# ── Model: pMLP (pure MLP baseline, no graph structure) ──────────────────────
+
 class JetPMLP(nn.Module):
     def __init__(self, in_dim=4, hidden=64, out_dim=2):
         super().__init__()
@@ -170,7 +154,6 @@ class JetPMLP(nn.Module):
         return self.classifier(x)
 
 
-# ── Training helper ──────────────────────────────────────────────────────────
 def train_and_evaluate(model, name, train_loader, val_loader, test_loader, epochs=15, lr=1e-2):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
@@ -206,7 +189,6 @@ def train_and_evaluate(model, name, train_loader, val_loader, test_loader, epoch
         _, _, val_auc = compute_roc_auc(all_labels, all_scores)
         print(f"[{name}] Epoch {epoch:2d} | Loss {total_loss / len(train_graphs):.4f} | Val Acc {correct / total:.4f} | Val AUC {val_auc:.4f}")
 
-    # Test
     model.eval()
     correct, total = 0, 0
     all_labels, all_scores = [], []
@@ -227,7 +209,6 @@ def train_and_evaluate(model, name, train_loader, val_loader, test_loader, epoch
     return fprs, tprs, test_auc
 
 
-# ── Training ─────────────────────────────────────────────────────────────────
 print("\n=== Training GCN ===")
 gcn_fprs, gcn_tprs, gcn_auc = train_and_evaluate(
     JetGCN(), "GCN", train_loader, val_loader, test_loader
@@ -238,7 +219,6 @@ mlp_fprs, mlp_tprs, mlp_auc = train_and_evaluate(
     JetPMLP(), "pMLP", train_loader, val_loader, test_loader
 )
 
-# ── Plot ROC curves ──────────────────────────────────────────────────────────
 plt.figure()
 plt.plot(gcn_fprs, gcn_tprs, label=f"GCN (AUC = {gcn_auc:.4f})")
 plt.plot(mlp_fprs, mlp_tprs, label=f"pMLP (AUC = {mlp_auc:.4f})")
@@ -248,6 +228,6 @@ plt.ylabel("True Positive Rate")
 plt.title("ROC Curve — Quark vs Gluon")
 plt.legend()
 plt.tight_layout()
-plt.savefig("task2_roc.png", dpi=150)
+plt.savefig("../fig/task2_roc.png", dpi=150)
 plt.show()
 

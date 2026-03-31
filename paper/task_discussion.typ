@@ -31,4 +31,10 @@ Quantum Machine Learning is a topic at the intersection of machine learning and 
 
 === Task V
 
+#image("../fig/task5_qgcn_circuit.png")
+
+This is the QGNN circuit with edges $[(0, 1), (1, 2), (3, 0)]$ and 4 vertices. There are three components of the model: encoding, node and edge transformation, and readout. The encoding layer initializes learnable parameters—in this case, $ 2$ parameters. The node and edge transformation first applies single-qubit rotations to each node, then performs parameterized two-qubit gates (CNOT and RZ) to represent message passing along edges. We stack the QGCN layer twice, followed by a readout stage that measures expectation values. In this implementation, the readout directly measures PauliZ on each qubit without additional parameterized gates.
+
+=== Task VI
+
 #bibliography("refs.bib")

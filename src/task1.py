@@ -45,5 +45,5 @@ print(f"Overlap |<q1q2|q3q4>|^2 = {2 * probs[0] - 1:.4f}")
 
 fig, ax = qml.draw_mpl(swap_test)()
 plt.title("SWAP Test Circuit")
-plt.savefig("task1_swap_test.png", dpi=150, bbox_inches="tight")
+plt.savefig("../fig/task1_swap_test.png", dpi=150, bbox_inches="tight")
 plt.show()
